@@ -1,0 +1,193 @@
+############用户定义内容 开始###############
+#TARGET_TYPE         := executable_bin
+#TARGET_TYPE         := dynamic_lib
+#TARGET_TYPE         := static_lib
+
+#TARGET              := main
+#TOOLCHAIN_MK        := 
+
+#USER_SOURCE_DIRS    := ./src
+#USER_INCLUDE_DIRS   := ./api ./include
+#USER_LIBRARY_DIRS   := ./lib ./output
+#USER_DEPEND_LIBS    := pthread
+#USER_DEFINES        :=
+#OUTPUT_DIR          := ./output/
+############用户定义内容 结束#################
+
+
+#全过程编译开关，打开生成预编译生成物、编译生成物和机器码文件，关闭只生成机器码文件
+#WHOLE_PROCESS_COMPILE := true
+
+
+#引用toolchain定义文件，其中定义TOOLCHAIN_PREFIX
+ifdef TOOLCHAIN_MK
+include $(TOOLCHAIN_MK)
+endif
+
+
+############工具链定义 开始###############
+CC      := $(TOOLCHAIN_PREFIX)gcc
+AR      := $(TOOLCHAIN_PREFIX)ar
+RANLIB  := $(TOOLCHAIN_PREFIX)ranlib
+STRIP   := $(TOOLCHAIN_PREFIX)strip
+############工具链定义 结束#################
+
+
+#添加通用定义
+USER_SOURCE_DIRS    += $(MAKERULE_COMMON_SOURCE_DIRS)
+USER_INCLUDE_DIRS   += $(MAKERULE_COMMON_INCLUDE_DIRS)
+USER_LIBRARY_DIRS   += $(MAKERULE_COMMON_LIBRARY_DIRS)
+USER_DEPEND_LIBS    += $(MAKERULE_COMMON_DEPEND_LIBS)
+USER_DEFINES        += $(MAKERULE_COMMON_DEFINES)
+USER_FLAGS          += $(MAKERULE_COMMON_USER_FLAGS)
+
+
+#编译参数
+LIBRARY := $(foreach lib,$(USER_DEPEND_LIBS),-l$(lib))
+LIB_DIR := $(foreach libdir,$(USER_LIBRARY_DIRS),-L$(libdir))
+DEFINES := $(foreach def,$(USER_DEFINES),-D$(def))
+INCLUDE := $(foreach incdir,$(USER_INCLUDE_DIRS),-I$(incdir))
+LDFLAGS := $(LIB_DIR) $(LIBRARY)
+CFLAGS  := -g -Wall $(INCLUDE) $(LDFLAGS) $(DEFINES) $(USER_FLAGS) -fPIC -pthread
+#CXXFLAGS:= $(CFLAGS)
+
+
+#shell命令定义
+CP      := cp -r
+RM      := rm -rf
+ECHO    := echo
+
+
+#源文件，自动找所有.c文件，并将目标定义为生成物文件
+SOURCE_DIRS       := $(foreach dir,$(USER_SOURCE_DIRS),$(shell find $(dir) -maxdepth 10 -type d))
+SOURCE            := $(foreach dir,$(SOURCE_DIRS),$(wildcard $(dir)/*.c))
+OBJS              := $(patsubst %.c,%.o,$(SOURCE))
+PREPROCESS_I      := $(patsubst %.c,%.i,$(SOURCE))
+COMPILE_S         := $(patsubst %.c,%.s,$(SOURCE))
+ASSEMBLE_O        := $(patsubst %.c,%.o,$(SOURCE))
+
+
+.PHONY : all clean preprocess compile assemble
+
+all : $(TARGET)
+
+preprocess : $(PREPROCESS_I)
+
+compile : $(COMPILE_S)
+
+assemble : $(ASSEMBLE_O)
+
+clean :
+	@for dir in $(SOURCE_DIRS); do find $$dir -name "*.o" | xargs $(RM) ; done
+	@for dir in $(SOURCE_DIRS); do find $$dir -name "*.i" | xargs $(RM) ; done
+	@for dir in $(SOURCE_DIRS); do find $$dir -name "*.s" | xargs $(RM) ; done
+	@$(ECHO) "[clean] remove: *.o *.i *.s"
+	@$(RM) $(TARGET)
+	@$(ECHO) "[clean] remove: $(TARGET)"
+	@#$(RM) $(OBJS)
+	@#$(RM) $(TARGET)
+
+#根据是否全过程编译定义目标和依赖
+ifeq ($(WHOLE_PROCESS_COMPILE),true)
+%.i : %.c
+	$(PREPROCESS)
+
+%.s : %.i
+	$(COMPILE)
+
+%.o : %.s
+	$(ASSEMBLE)
+
+$(TARGET) : $(PREPROCESS_I) $(COMPILE_S) $(ASSEMBLE_O)
+	$(BUILD_AND_COPY_TARGET)
+else
+%.o : %.c
+	$(COMPILE_OBJS)
+
+$(TARGET) : $(OBJS)
+	$(BUILD_AND_COPY_TARGET)
+endif
+
+
+#生成物类型定义编译目标命令
+ifeq ($(TARGET_TYPE),static_lib)
+define BUILD_TARGET
+$(BUILD_STATIC_LIB)
+@$(ECHO) "[build] output: $@"
+endef
+else ifeq ($(TARGET_TYPE),dynamic_lib)
+define BUILD_TARGET
+$(BUILD_DYNAMIC_LIB)
+@$(ECHO) "[build] output: $@"
+endef
+else ifeq ($(TARGET_TYPE),executable_bin)
+define BUILD_TARGET
+$(BUILD_EXECUTABLE_BIN)
+@$(ECHO) "[build] output: $@"
+endef
+else
+define BUILD_TARGET
+$(error "wrong TARGET_TYPE: $(TARGET_TYPE)!!!")
+endef
+endif
+
+
+#拷贝生成物
+define COPY_TARGET
+@$(CP) $(TARGET) $(OUTPUT_DIR)
+@$(ECHO) "[build] cp: $@" to $(OUTPUT_DIR)
+endef
+
+
+#静态库编译指令
+define BUILD_STATIC_LIB
+@$(AR) cru $(TARGET) $(OBJS)
+@$(RANLIB) $(TARGET)
+endef
+
+
+#动态库编译指令
+define BUILD_DYNAMIC_LIB
+@$(CC) $(CFLAGS) -Wl,-soname,$(TARGET) -Wl,--whole-archive -shared -o $@ $(OBJS)
+endef
+
+
+#可执行文件编译指令
+define BUILD_EXECUTABLE_BIN
+$(CC) $(CFLAGS) $(OBJS) -rdynamic -g -o $@ $(LDFLAGS)
+endef
+
+
+#源文件->预编译
+define PREPROCESS
+@$(CC) $(CFLAGS) -E -o $@ $<
+@$(ECHO) "[build] preprocess: $<  =>  $@"
+endef
+
+
+#预编译->汇编
+define COMPILE
+@$(CC) $(CFLAGS) -S -o $@ $<
+@$(ECHO) "[build] compile: $<  =>  $@"
+endef
+
+
+#汇编->机器码
+define ASSEMBLE
+@$(CC) $(CFLAGS) -c -o $@ $<
+@$(ECHO) "[build] assemble: $<  =>  $@"
+endef
+
+
+#源文件->机器码
+define COMPILE_OBJS
+@$(CC) -c $(CFLAGS) -o $@ $<
+@$(ECHO) "[build] compile: $<  =>  $@"
+endef
+
+
+#编译生成物和拷贝
+define BUILD_AND_COPY_TARGET
+$(BUILD_TARGET)
+$(COPY_TARGET)
+endef
